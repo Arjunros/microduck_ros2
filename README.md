@@ -10,6 +10,17 @@ with Nav2, and takes orders in plain English (typed or spoken) through an LLM ag
 
 > Community project. Not affiliated with or endorsed by Pollen Robotics.
 
+<p align="center"><img src="docs/media/hero_apartment.png" width="820" alt="Microduck standing on a rug in the simulated apartment, next to its ball"></p>
+
+<!-- DEMO VIDEO: drag an .mp4 into this README in GitHub's web editor (it uploads to
+     user-attachments and plays inline), and put the resulting link here. -->
+
+| What the duck sees (head camera, RGB + depth) | Nav2 map + named rooms (generated) |
+|---|---|
+| <img src="docs/media/head_camera_rgb.png" width="400"><br><img src="docs/media/head_camera_depth.png" width="400"> | <img src="docs/media/nav_map_places.png" width="400"> |
+| **The apartment (Pollen's scene), from above** | **RViz: robot model + ball** |
+| <img src="docs/media/apartment_wide.png" width="400"> | <img src="docs/media/rviz_duck_ball.png" width="400"> |
+
 ```
   "go to the kitchen and sit" ─▶ microduck_agent (rule parser | Ollama | OpenAI | Claude)
                                     │ Nav2 goals, /cmd_vel, skills, head, camera

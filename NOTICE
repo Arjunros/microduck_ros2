@@ -18,3 +18,10 @@ scripts/fetch_microduck_assets.sh:
     See LICENSE-MODELS.md in microduck_rl.
   - Policies from pollen-robotics/microduck-policies on Hugging Face, under
     the license stated in that repository.
+
+Images in docs/media/ that show the Microduck robot or its scenes are renders of
+Pollen Robotics' 3D model and MuJoCo scenes (pollen-robotics/microduck_rl). The
+robot meshes are licensed CC BY-NC-SA 4.0, so these images are shared under
+CC BY-NC-SA 4.0 too (https://creativecommons.org/licenses/by-nc-sa/4.0/), with
+credit to Pollen Robotics. They are not covered by this repository's Apache-2.0
+licence.
