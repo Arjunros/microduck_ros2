@@ -1,6 +1,6 @@
 # microduck_ros2
 
-[![CI](https://github.com/<you>/microduck_ros2/actions/workflows/ci.yml/badge.svg)](https://github.com/<you>/microduck_ros2/actions/workflows/ci.yml)
+[![CI](https://github.com/Arjunros/microduck_ros2/actions/workflows/ci.yml/badge.svg)](https://github.com/Arjunros/microduck_ros2/actions/workflows/ci.yml)
 
 ROS 2 simulation and policy runtime for [Pollen Robotics' Microduck](https://github.com/pollen-robotics/microduck_rl),
 the 14-servo RL biped. It runs the robot in MuJoCo with the same BAM XL330 actuator model the policies are
@@ -54,7 +54,7 @@ A self-contained ROS 2 Jazzy + Python 3.12 environment from RoboStack, with BAM,
 
 ```bash
 curl -fsSL https://pixi.sh/install.sh | bash      # then open a new terminal
-git clone https://github.com/<you>/microduck_ros2 && cd microduck_ros2
+git clone https://github.com/Arjunros/microduck_ros2 && cd microduck_ros2
 pixi install && pixi run fetch && pixi run build
 ```
 
@@ -80,7 +80,7 @@ The image contains Pollen's non-commercial meshes, so keep it local; don't push 
 ### Option C: system ROS 2 Jazzy
 
 ```bash
-cd ~/ros2_ws/src && git clone https://github.com/<you>/microduck_ros2
+cd ~/ros2_ws/src && git clone https://github.com/Arjunros/microduck_ros2
 pip install --break-system-packages mujoco onnxruntime huggingface_hub pillow \
   "better-actuator-models @ git+https://github.com/Rhoban/bam.git@62bd8ce12154340be97e06f7f41a0ca8f116d967"
 sudo apt install ros-jazzy-navigation2 ros-jazzy-slam-toolbox ros-jazzy-teleop-twist-keyboard ros-jazzy-teleop-twist-joy
