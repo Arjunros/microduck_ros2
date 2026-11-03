@@ -29,9 +29,13 @@ def test_reset_step_state(use_bam):
 
     sim.set_targets([0.1], names=["head_yaw"])
     assert sim.targets[sim.joint_names.index("head_yaw")] == pytest.approx(0.1)
+    t = sim.time
     sim.reset()
-    assert sim.time == 0.0
+    assert sim.time == pytest.approx(t + sim.control_dt)   # clock keeps running (TF/Nav2 hate time travel)
+    assert sim.state().trunk_pos[2] == pytest.approx(0.125)
     np.testing.assert_allclose(sim.targets, sim.default_pose)
+    sim.reset(keep_time=False)
+    assert sim.time == 0.0
 
 
 def test_mesh_transform_reproduces_mujoco_vertices():

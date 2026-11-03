@@ -30,7 +30,7 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import Imu, JointState, LaserScan
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Empty, Float64MultiArray
 from std_srvs.srv import Trigger
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 from visualization_msgs.msg import Marker, MarkerArray
@@ -157,6 +157,7 @@ class MicroduckSimNode(Node):
         self.pub_vis = self.create_publisher(MarkerArray, "/microduck/visual", 1)
         self.pub_qpos = self.create_publisher(Float64MultiArray, "/microduck/sim_qpos", 1)
         self.pub_ball = self.create_publisher(PointStamped, "/microduck/ball", 10)
+        self.pub_reset = self.create_publisher(Empty, "/microduck/sim_reset", 10)
         self._state_period = 1.0 / max(gp("state_rate"), 1e-3)
         self._last_qpos = -1e9
         self.tf = TransformBroadcaster(self)
@@ -242,6 +243,7 @@ class MicroduckSimNode(Node):
                     self._last_visual = self._last_scan = self._last_qpos = -1e9
                 self._reset_requested = False
                 wall_start, sim_start = time.monotonic(), self.sim.time
+                self.pub_reset.publish(Empty())   # tells the policy to clear its action history
                 self.get_logger().info("simulation reset")
 
             t_k = _to_ns(self.sim.time)

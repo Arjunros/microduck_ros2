@@ -142,6 +142,16 @@ def test_skills_over_ros(node, fake_set, tmp_path):
         assert _call(node, "/microduck/stand")[0]
         assert _spin(node, 20, lambda: states[-1] == "walk" and "rise" in states)
         assert _call(node, "/microduck/place_ball_left")[0]
+        # Back-to-back resets: time must keep moving forward and the loop must not freeze.
+        from sensor_msgs.msg import JointState
+        stamps = []
+        node.create_subscription(JointState, "/joint_states", lambda m: stamps.append(
+            m.header.stamp.sec * 10**9 + m.header.stamp.nanosec), 50)
+        assert _spin(node, 10, lambda: len(stamps) > 5)
+        assert _call(node, "/microduck/reset")[0] and _call(node, "/microduck/reset")[0]
+        n = len(stamps)
+        assert _spin(node, 15, lambda: len(stamps) > n + 50), "sim froze after reset"
+        assert all(b >= a for a, b in zip(stamps, stamps[1:])), "sim time went backwards"
     finally:
         launch.stop()
     assert states == ["walk", "kick_left", "walk", "ground_pick", "walk", "sit", "rise", "walk"]

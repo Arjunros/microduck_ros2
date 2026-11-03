@@ -22,7 +22,7 @@ from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Imu, JointState
-from std_msgs.msg import Float32MultiArray, Float64MultiArray, String
+from std_msgs.msg import Empty, Float32MultiArray, Float64MultiArray, String
 from std_srvs.srv import Trigger
 
 from .constants import (BODY_CMD_MAX_ANGLE, BODY_CMD_MAX_XY, BODY_CMD_MAX_Z, JOINT_NAMES,
@@ -92,6 +92,7 @@ class MicroduckPolicyNode(Node):
         self.create_subscription(Twist, "/cmd_vel", self._on_cmd_vel, 10)
         self.create_subscription(Float64MultiArray, "/microduck/head_cmd", self._on_head, 10)
         self.create_subscription(Float64MultiArray, "/microduck/body_cmd", self._on_body, 10)
+        self.create_subscription(Empty, "/microduck/sim_reset", self._on_sim_reset, 10)
         self.pub_state = self.create_publisher(String, "/microduck/policy_state", 10)
         self.create_service(Trigger, "/microduck/policy/reset", self._on_reset)
         for name in self.ctrl.skills:
@@ -155,6 +156,11 @@ class MicroduckPolicyNode(Node):
             if cli is not None and cli.service_is_ready():
                 cli.call_async(Trigger.Request())
         return ok, msg
+
+    def _on_sim_reset(self, msg):
+        self.get_logger().info("sim reset: clearing last action and any running skill")
+        self.ctrl.reset()
+        self._prev_label = self.ctrl.label
 
     def _on_reset(self, request, response):
         self.ctrl.reset()

@@ -79,20 +79,23 @@ def main():
     ap.add_argument("--no-agent", action="store_true", help="skip the natural-language part")
     ap.add_argument("--command", default="go to the kitchen", help="what to ask the agent at the end")
     ap.add_argument("--agent-timeout", type=float, default=60.0)
+    ap.add_argument("--reset", action="store_true", help="reset the duck to the start pose first")
     a, ros_args = ap.parse_known_args()
 
     rclpy.init(args=ros_args)
     d = Demo()
     try:
         print(f"\n{BOLD}🦆 Microduck in ROS 2{RESET}  {DIM}MuJoCo + Pollen Robotics' RL policies{RESET}", flush=True)
-        d.call("/microduck/reset")
+        if a.reset:
+            d.call("/microduck/reset")
         d.spin_for(2.5)
 
-        caption("Walking", "Pollen's velstand RL policy, driven by /cmd_vel")
-        d.drive(6.0, vx=0.4)
-        caption("Turning in place")
-        d.drive(3.5, wz=1.0)
-        d.drive(4.0, vx=0.4)
+        # The duck spawns in the corridor facing a wall ~0.5 m away (+x): turn left
+        # first, then walk north up the open corridor (towards the kitchen door).
+        caption("Turning in place", "Pollen's velstand RL policy, driven by /cmd_vel")
+        d.drive(1.8, wz=1.0)
+        caption("Walking")
+        d.drive(7.0, vx=0.4)
 
         caption("Looking around", "head pose commands; the RViz panel is the head camera")
         d.look(yaw=0.5)

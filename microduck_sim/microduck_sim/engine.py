@@ -196,7 +196,7 @@ class MicroduckSim:
 
         self.default_pose = self._keyframe_ctrl(init_keyframe)
         self.targets = self.default_pose.copy()
-        self.reset()
+        self.reset(keep_time=False)
 
     # ------------------------------------------------------------------ setup
     def _load_with_bam(self, vin, vin_drop_gain, kp_fw, timestep):
@@ -264,8 +264,14 @@ class MicroduckSim:
     def time(self):
         return float(self.data.time)
 
-    def reset(self, xy=(0.0, 0.0), yaw=0.0):
+    def reset(self, xy=(0.0, 0.0), yaw=0.0, keep_time=True):
+        """Back to the start pose. Time keeps running by default: ROS consumers
+        (TF buffers, Nav2) treat a clock that jumps backwards as stale data."""
+        t = float(self.data.time)
         mujoco.mj_resetData(self.model, self.data)
+        if keep_time:
+            # One tick forward, so the post-reset state always has a new stamp.
+            self.data.time = t + self.control_dt
         q = self.data.qpos
         a = self._free_qpos
         q[a:a + 3] = [xy[0], xy[1], self.init_z]
