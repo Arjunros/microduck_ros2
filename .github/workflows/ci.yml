@@ -43,7 +43,7 @@ jobs:
       - name: Build
         run: pixi run -e ci build
 
-      - name: Integration tests (real nodes over ROS 2: sync loop, skills, Nav2, camera + TF, agent)
+      - name: Integration tests (real nodes over ROS 2 - sync loop, skills, Nav2, camera + TF, agent)
         run: pixi run -e ci test-integration
 
       - name: Upload launch logs on failure
