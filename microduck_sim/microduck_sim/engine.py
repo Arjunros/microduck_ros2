@@ -28,6 +28,25 @@ BAM_STIFF_SOLIMP_FRICTION = (0.99, 0.9999, 0.001, 0.5, 2.0)
 TRUNK_BODY = "trunk_base"
 TRUNK_FREEJOINT = "trunk_base_freejoint"
 GYRO_SENSOR = "imu_ang_vel"
+BALL_FREEJOINT = "ball_free"
+
+SCENE_DIR_REL = "src/mjlab_microduck/robot/microduck"
+# Short names for the scenes shipped with microduck_rl.
+SCENES = {"flat": "scene.xml", "ball": "scene_ball.xml", "apartment": "scene_apartment.xml"}
+
+# STAND2 pose, used when the scene has no STAND keyframe (scene_ball.xml has
+# none: the ball changes nq). Same values as microduck_policy.constants.
+STAND_POSE = np.array([
+    0.0, -0.08726646259971647, -0.457924, -0.004940, 0.452984,
+    0.3490658503988659, 0.3490658503988659, 0.0, 0.0,
+    0.0, 0.08726646259971647, 0.457924, 0.004940, -0.452984,
+])
+
+# Ball placement for the kick policies, in the robot's yaw frame. Must match
+# microduck_rl's reset_ball_in_front_of_foot (infer_policy.py BALL_OFFSET_*).
+BALL_OFFSET_X = 0.09
+BALL_OFFSET_ABS_Y = 0.042
+BALL_RADIUS = 0.035
 
 
 def bam_available():
@@ -108,6 +127,13 @@ class MicroduckSim:
         self._free_qvel = int(m.jnt_dofadr[fj])
         self._gyro_adr = self._sensor_adr(GYRO_SENSOR)
         self._accel_adr = self._sensor_adr("imu_accel")
+        bj = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, BALL_FREEJOINT)
+        self._ball_qpos = int(m.jnt_qposadr[bj]) if bj >= 0 else None
+        self._ball_qvel = int(m.jnt_dofadr[bj]) if bj >= 0 else None
+        # Lidar sees only the world (geom group 0); the robot's geoms are in
+        # groups 2-3, so rays pass through it.
+        self._world_groups = np.array([1, 0, 0, 0, 0, 0], dtype=np.uint8)
+        self._scan_cache = {}
 
         self.default_pose = self._keyframe_ctrl(init_keyframe)
         self.targets = self.default_pose.copy()
@@ -161,6 +187,8 @@ class MicroduckSim:
     def _keyframe_ctrl(self, name):
         kid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, name)
         if kid < 0:
+            if self.model.nu == len(STAND_POSE):
+                return STAND_POSE.copy()
             log.warning("keyframe '%s' missing; default pose = zeros", name)
             return np.zeros(self.model.nu)
         # Keyframe ctrl is in position-actuator units (joint angles) in the XML,
@@ -215,8 +243,65 @@ class MicroduckSim:
                 self.bam_ctrl.update()
             mujoco.mj_step(self.model, self.data)
 
-    def fallen(self, min_height=0.06):
-        return float(self.data.xpos[self._trunk_id][2]) < min_height
+    def fallen(self, min_height=0.06, max_tilt_deg=60.0):
+        """Trunk low, or tilted past max_tilt_deg (height alone misses side flops)."""
+        up_z = float(self.data.xmat[self._trunk_id][8])  # R[2,2]: trunk z-axis . world z
+        return (float(self.data.xpos[self._trunk_id][2]) < min_height
+                or up_z < np.cos(np.radians(max_tilt_deg)))
+
+    # ------------------------------------------------------------------ ball
+    @property
+    def has_ball(self):
+        return self._ball_qpos is not None
+
+    def place_ball(self, side):
+        """Put the ball in front of the left/right foot, as the kick training reset does."""
+        if not self.has_ball:
+            return False
+        x, y, yaw = self.footprint_pose()
+        off_y = BALL_OFFSET_ABS_Y if side == "left" else -BALL_OFFSET_ABS_Y
+        bx = x + np.cos(yaw) * BALL_OFFSET_X - np.sin(yaw) * off_y
+        by = y + np.sin(yaw) * BALL_OFFSET_X + np.cos(yaw) * off_y
+        a, v = self._ball_qpos, self._ball_qvel
+        self.data.qpos[a:a + 7] = [bx, by, BALL_RADIUS, 1, 0, 0, 0]
+        self.data.qvel[v:v + 6] = 0.0
+        mujoco.mj_forward(self.model, self.data)
+        return True
+
+    # ----------------------------------------------------------- navigation
+    def footprint_pose(self):
+        """(x, y, yaw) of the trunk projected on the floor."""
+        p = self.data.xpos[self._trunk_id]
+        R = self.data.xmat[self._trunk_id].reshape(3, 3)
+        return float(p[0]), float(p[1]), float(np.arctan2(R[1, 0], R[0, 0]))
+
+    def scan(self, n_rays=360, height=0.12, range_min=0.05, range_max=6.0):
+        """Virtual planar lidar: level rays at `height` above the floor (z=0),
+        centred on the trunk and rotating with its yaw. Returns ranges [m],
+        inf where nothing was hit within range_max (REP 117).
+
+        Microduck has no lidar; this stands in for perception so Nav2 can run.
+        """
+        x, y, yaw = self.footprint_pose()
+        key = n_rays
+        if key not in self._scan_cache:
+            ang = -np.pi + np.arange(n_rays) * (2 * np.pi / n_rays)
+            self._scan_cache[key] = ang
+        ang = self._scan_cache[key] + yaw
+        vec = np.zeros((n_rays, 3))
+        vec[:, 0], vec[:, 1] = np.cos(ang), np.sin(ang)
+        pnt = np.array([x, y, height], dtype=np.float64)
+        geomid = np.zeros(n_rays, dtype=np.int32)
+        dist = np.zeros(n_rays, dtype=np.float64)
+        try:
+            mujoco.mj_multiRay(self.model, self.data, pnt, vec.reshape(-1), self._world_groups, 1, -1,
+                               geomid, dist, None, n_rays, range_max)
+        except TypeError:  # older mujoco without the `normal` argument
+            mujoco.mj_multiRay(self.model, self.data, pnt, vec.reshape(-1), self._world_groups, 1, -1,
+                               geomid, dist, n_rays, range_max)
+        ranges = np.where((geomid < 0) | (dist < 0) | (dist > range_max), np.inf, dist)
+        ranges = np.where(ranges < range_min, -np.inf, ranges)
+        return ranges
 
     # ----------------------------------------------------------------- state
     def state(self):

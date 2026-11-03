@@ -43,7 +43,7 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: world
+    Fixed Frame: odom
     Frame Rate: 30
   Name: root
   Tools:
@@ -60,7 +60,7 @@ Visualization Manager:
         Z: 0.1
       Pitch: 0.4
       Yaw: 0.8
-      Target Frame: trunk_base
+      Target Frame: base_footprint
       Value: Orbit (rviz)
     Saved: ~
 Window Geometry:

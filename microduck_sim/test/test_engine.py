@@ -49,3 +49,48 @@ def test_mesh_transform_reproduces_mujoco_vertices():
         pts = (v.T_geom_mesh[:3, :3] @ raw.T).T + v.T_geom_mesh[:3, 3]
         np.testing.assert_allclose(pts.min(0), vmj.min(0), atol=1e-4)
         np.testing.assert_allclose(pts.max(0), vmj.max(0), atol=1e-4)
+
+
+APARTMENT = os.path.join(RL_PATH, "src/mjlab_microduck/robot/microduck/scene_apartment.xml")
+BALL = os.path.join(RL_PATH, "src/mjlab_microduck/robot/microduck/scene_ball.xml")
+
+
+def test_scan_ignores_robot_and_sees_corridor_walls():
+    sim = MicroduckSim(APARTMENT, use_bam=False)
+    r = sim.scan(n_rays=360)
+    assert np.all(np.isfinite(r))                  # enclosed: every ray hits something
+    assert r.min() > 0.3                           # robot's own geoms are not seen
+    # The duck starts in the north-south corridor: far along y, close along x.
+    assert r[90] > 2.5 and r[270] > 2.5            # +-90 deg (index = deg + 180)
+    assert r[180] < 1.0 and r[0] < 1.0
+
+
+def test_ball_scene_and_placement():
+    sim = MicroduckSim(BALL, use_bam=False)        # no STAND keyframe: falls back to STAND_POSE
+    np.testing.assert_allclose(sim.default_pose, MicroduckSim(SCENE, use_bam=False).default_pose)
+    assert sim.has_ball and sim.place_ball("right")
+    a = sim._ball_qpos
+    np.testing.assert_allclose(sim.data.qpos[a:a + 3], [0.09, -0.042, 0.035])
+
+
+def test_fallen_detects_tilt():
+    sim = MicroduckSim(SCENE, use_bam=False)
+    assert not sim.fallen()
+    a = sim._free_qpos
+    sim.data.qpos[a + 3:a + 7] = [np.cos(np.pi / 4), np.sin(np.pi / 4), 0, 0]   # rolled 90 deg
+    mujoco.mj_forward(sim.model, sim.data)
+    assert sim.fallen()
+
+
+def test_apartment_map(tmp_path):
+    from microduck_sim.mapgen import main as make_map
+    make_map(["--scene", "apartment", "--microduck-rl-path", RL_PATH, "--out", str(tmp_path / "apt")])
+    text = (tmp_path / "apt.yaml").read_text()
+    assert "image: apt.pgm" in text and "resolution: 0.05" in text
+    raw = (tmp_path / "apt.pgm").read_bytes().split(b"\n", 3)
+    w, h = map(int, raw[1].split())
+    img = np.frombuffer(raw[3], np.uint8).reshape(h, w)[::-1]
+    origin = [float(v) for v in text.split("origin: [")[1].split("]")[0].split(",")[:2]]
+    cell = lambda x, y: img[int((y - origin[1]) / 0.05), int((x - origin[0]) / 0.05)]  # noqa: E731
+    assert cell(0.0, 0.0) == 254                    # the start pose is free
+    assert 5.0 < w * 0.05 < 10.0 and 4.0 < h * 0.05 < 8.0   # ~7 x 6 m flat plus margin

@@ -1,11 +1,12 @@
-# Optional: a self-contained ROS 2 Jazzy + Python 3.12 environment (RoboStack),
-# which works on any Linux including Ubuntu 22.04. Python 3.12 is what lets the
-# BAM actuator model load, so this is the most faithful way to run the sim.
+# A self-contained ROS 2 Jazzy + Python 3.12 environment (RoboStack), which works on
+# any Linux including Ubuntu 22.04. Python 3.12 is what lets the BAM actuator model
+# load, so this is the most faithful way to run the sim.
 #
-#   pixi install
-#   pixi run fetch      # model + policies
-#   pixi run build
-#   pixi run sim walking_policy:=$HOME/microduck-policies/<walk>.onnx
+#   pixi install && pixi run fetch && pixi run build
+#   pixi run sim                  # walk on the flat floor (velstand + all skills)
+#   pixi run sim scene:=ball      # with a ball to kick
+#   pixi run nav                  # Nav2 in the apartment (pixi run nav mode:=slam to map it)
+#   pixi run keyboard             # second terminal
 [workspace]
 name = "microduck_ros2"
 channels = ["https://conda.anaconda.org/robostack-jazzy", "https://conda.anaconda.org/conda-forge"]
@@ -23,12 +24,16 @@ ros-jazzy-visualization-msgs = "*"
 ros-jazzy-std-srvs = "*"
 ros-jazzy-tf2-ros-py = "*"
 ros-jazzy-launch-ros = "*"
+ros-jazzy-navigation2 = "*"
+ros-jazzy-nav2-map-server = "*"
+ros-jazzy-slam-toolbox = "*"
 colcon-common-extensions = "*"
 setuptools = "<80"
 mujoco = "*"
 onnxruntime = "*"
 pytest = "*"
 onnx = "*"
+huggingface_hub = "*"
 pip = "*"
 
 [pypi-dependencies]
@@ -39,5 +44,8 @@ numpy-stl = "*"
 fetch = "bash scripts/fetch_microduck_assets.sh"
 build = { cmd = "mkdir -p .ws/src && touch .ws/COLCON_IGNORE && ln -sfn $PIXI_PROJECT_ROOT .ws/src/microduck_ros2 && cd .ws && colcon build --symlink-install --base-paths src" }
 test = "PYTHONPATH=microduck_policy:microduck_sim python -m pytest -q microduck_policy/test microduck_sim/test"
+test-integration = { cmd = "bash -c 'source .ws/install/setup.bash && python -m pytest -q -s microduck_bringup/test'", depends-on = ["build"] }
 sim = { cmd = "bash -c 'source .ws/install/setup.bash && ros2 launch microduck_bringup sim.launch.py \"$@\"' --" }
+nav = { cmd = "bash -c 'source .ws/install/setup.bash && ros2 launch microduck_bringup nav.launch.py \"$@\"' --" }
+map = { cmd = "bash -c 'source .ws/install/setup.bash && ros2 run microduck_sim make_map \"$@\"' --" }
 keyboard = { cmd = "bash -c 'source .ws/install/setup.bash && ros2 run teleop_twist_keyboard teleop_twist_keyboard'" }

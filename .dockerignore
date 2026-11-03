@@ -1,0 +1,5 @@
+.ws/
+.pixi/
+pixi.lock
+**/__pycache__/
+*.onnx

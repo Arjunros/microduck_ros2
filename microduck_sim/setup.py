@@ -4,7 +4,7 @@ package_name = "microduck_sim"
 
 setup(
     name=package_name,
-    version="0.1.0",
+    version="0.2.0",
     packages=find_packages(exclude=["test"]),
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
@@ -19,6 +19,7 @@ setup(
     entry_points={
         "console_scripts": [
             "sim_node = microduck_sim.sim_node:main",
+            "make_map = microduck_sim.mapgen:main",
         ],
     },
 )

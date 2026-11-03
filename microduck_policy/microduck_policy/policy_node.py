@@ -5,7 +5,12 @@ Subscribes  /joint_states, /imu/data (orientation = trunk orientation, gyro),
             /microduck/head_cmd  (std_msgs/Float64MultiArray, 4: neck_pitch, head_pitch, head_yaw, head_roll deltas [rad])
             /microduck/body_cmd  (std_msgs/Float64MultiArray, 6: x, y, z [m], roll, pitch, yaw [rad])
 Publishes   /microduck/joint_targets (sensor_msgs/JointState, header.stamp copied from the state)
+            /microduck/policy_state (std_msgs/String: walk, stand, sit, rise, ground_pick, <skill>)
             /microduck/policy_obs (std_msgs/Float32MultiArray, when publish_debug is true)
+Services    /microduck/skill/<name>   (std_srvs/Trigger) one per skill in the policy set,
+                                      e.g. kick_left, kick_right, roulade, ground_pick
+            /microduck/sit, /microduck/stand (std_srvs/Trigger)
+            /microduck/policy/reset   (std_srvs/Trigger)
 
 It steps once per /joint_states message, so it runs at whatever rate the sim
 (or, later, the hardware driver) publishes state: 50 Hz for Microduck.
@@ -17,13 +22,13 @@ from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Imu, JointState
-from std_msgs.msg import Float32MultiArray, Float64MultiArray
+from std_msgs.msg import Float32MultiArray, Float64MultiArray, String
 from std_srvs.srv import Trigger
 
 from .constants import (BODY_CMD_MAX_ANGLE, BODY_CMD_MAX_XY, BODY_CMD_MAX_Z, JOINT_NAMES,
                         NUM_JOINTS, VEL_LIMITS)
 from .observation import make_command
-from .policy import MicroduckController, OnnxPolicy, PolicyLoadError
+from .policy import PolicyLoadError, load_policy_set
 
 
 def _stamp_ns(s):
@@ -34,8 +39,10 @@ class MicroduckPolicyNode(Node):
     def __init__(self):
         super().__init__("microduck_policy")
         p = self.declare_parameter
-        p("walking_policy", "")
+        p("policy_dir", "")              # a policy set (with manifest.json): enables skills
+        p("walking_policy", "")          # file in policy_dir or absolute path; "" = the set's walk slot
         p("standing_policy", "")
+        p("place_ball_on_kick", True)    # call the sim's /microduck/place_ball_* when a kick starts
         p("action_scale", -1.0)          # <0: take it from manifest.json, else 1.0
         p("switch_threshold", 0.05)
         p("cmd_timeout", 0.5)            # s without /cmd_vel -> zero twist
@@ -48,15 +55,20 @@ class MicroduckPolicyNode(Node):
         scale = gp("action_scale")
         scale = None if scale is None or scale < 0 else scale
         try:
-            walking = OnnxPolicy(gp("walking_policy"), scale) if gp("walking_policy") else None
-            standing = OnnxPolicy(gp("standing_policy"), scale) if gp("standing_policy") else None
-            self.ctrl = MicroduckController(walking, standing, gp("switch_threshold"))
+            self.ctrl = load_policy_set(gp("policy_dir"), gp("walking_policy"), gp("standing_policy"),
+                                        gp("switch_threshold"), scale,
+                                        log=lambda m: self.get_logger().warn(m))
         except PolicyLoadError as e:
             self.get_logger().fatal(str(e))
             raise
-        for name, pol in (("walking", walking), ("standing", standing)):
+        c = self.ctrl
+        for name, pol in (("walking", c.walking), ("standing", c.standing)):
             if pol is not None:
                 self.get_logger().info(f"{name} policy: {pol.path} (action_scale={pol.action_scale})")
+        extras = sorted(c.skills) + (["ground_pick"] if c.ground_pick_def else [])
+        self.get_logger().info(
+            f"skills: {', '.join(extras) or 'none'}; sit/stand: {'yes' if c.sitstand_def else 'no'}"
+            + ("" if gp("policy_dir") else "  (set policy_dir to enable skills)"))
 
         self.limits = (gp("vx_limits"), gp("vy_limits"), gp("wz_limits"))
         self.cmd_timeout = gp("cmd_timeout")
@@ -69,7 +81,8 @@ class MicroduckPolicyNode(Node):
         self._imu = None
         self._last_state_stamp = None
         self._index = None  # JointState index for each policy joint
-        self._prev_active = self.ctrl.active_name
+        self._prev_label = self.ctrl.label
+        self.place_ball_on_kick = gp("place_ball_on_kick")
 
         qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST, depth=10)
         self.pub_targets = self.create_publisher(JointState, "/microduck/joint_targets", qos)
@@ -79,7 +92,19 @@ class MicroduckPolicyNode(Node):
         self.create_subscription(Twist, "/cmd_vel", self._on_cmd_vel, 10)
         self.create_subscription(Float64MultiArray, "/microduck/head_cmd", self._on_head, 10)
         self.create_subscription(Float64MultiArray, "/microduck/body_cmd", self._on_body, 10)
+        self.pub_state = self.create_publisher(String, "/microduck/policy_state", 10)
         self.create_service(Trigger, "/microduck/policy/reset", self._on_reset)
+        for name in self.ctrl.skills:
+            self.create_service(Trigger, f"/microduck/skill/{name}",
+                                lambda rq, rs, n=name: self._answer(rs, *self._start_skill(n)))
+        if self.ctrl.ground_pick_def is not None:
+            self.create_service(Trigger, "/microduck/skill/ground_pick",
+                                lambda rq, rs: self._answer(rs, *self.ctrl.start_ground_pick()))
+        if self.ctrl.sitstand_def is not None:
+            self.create_service(Trigger, "/microduck/sit", lambda rq, rs: self._answer(rs, *self.ctrl.sit()))
+            self.create_service(Trigger, "/microduck/stand", lambda rq, rs: self._answer(rs, *self.ctrl.stand()))
+        self._ball_clients = {side: self.create_client(Trigger, f"/microduck/place_ball_{side}")
+                              for side in ("left", "right")}
 
     # ------------------------------------------------------------- commands
     def _on_cmd_vel(self, msg):
@@ -113,8 +138,27 @@ class MicroduckPolicyNode(Node):
         age = (self.get_clock().now() - self._last_twist_time).nanoseconds * 1e-9
         return self.twist if age <= self.cmd_timeout else np.zeros(3)
 
+    def _answer(self, response, ok, message):
+        response.success, response.message = bool(ok), message
+        # rclpy forbids one call site logging at two severities, hence two calls.
+        if ok:
+            self.get_logger().info(message)
+        else:
+            self.get_logger().warn(message)
+        return response
+
+    def _start_skill(self, name):
+        ok, msg = self.ctrl.start_skill(name)
+        if ok and self.place_ball_on_kick and "kick" in name:
+            side = "left" if "left" in name else "right" if "right" in name else None
+            cli = self._ball_clients.get(side)
+            if cli is not None and cli.service_is_ready():
+                cli.call_async(Trigger.Request())
+        return ok, msg
+
     def _on_reset(self, request, response):
         self.ctrl.reset()
+        self._prev_label = self.ctrl.label
         self._last_state_stamp = None
         response.success = True
         response.message = "policy state cleared"
@@ -134,6 +178,9 @@ class MicroduckPolicyNode(Node):
                 self.ctrl.reset()
             elif stamp == self._last_state_stamp:
                 return  # same tick republished (sim paused): don't double-step
+        dt = 0.02
+        if self._last_state_stamp is not None and 0 < stamp - self._last_state_stamp < 100_000_000:
+            dt = (stamp - self._last_state_stamp) * 1e-9
         self._last_state_stamp = stamp
 
         if self._index is None or len(self._index) != NUM_JOINTS:
@@ -152,11 +199,12 @@ class MicroduckPolicyNode(Node):
         gyro = (g.x, g.y, g.z)
 
         self.ctrl.set_command(make_command(self._current_twist(), self.head, self.body))
-        if self.ctrl.active_name != self._prev_active:
-            self.get_logger().info(f"switched to {self.ctrl.active_name} policy")
-            self._prev_active = self.ctrl.active_name
+        if self.ctrl.label != self._prev_label:
+            self.get_logger().info(f"policy: {self._prev_label} -> {self.ctrl.label}")
+            self._prev_label = self.ctrl.label
+        self.pub_state.publish(String(data=self.ctrl.label))
         try:
-            targets, obs, _ = self.ctrl.step(gyro, quat_wxyz, pos, vel)
+            targets, obs, _ = self.ctrl.step(gyro, quat_wxyz, pos, vel, dt)
         except FloatingPointError as e:
             self.get_logger().error(str(e), throttle_duration_sec=1.0)
             return

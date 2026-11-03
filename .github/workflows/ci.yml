@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: build + tests (ROS 2 Jazzy, pixi)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # Commit of pollen-robotics/microduck_rl this port is tested against
+      # (keep in sync with scripts/fetch_microduck_assets.sh).
+      MICRODUCK_RL_COMMIT: bae39f5900b318f7e87fc485c30a31213cfa14eb
+      MICRODUCK_RL_PATH: ${{ github.workspace }}/../microduck_rl
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: prefix-dev/setup-pixi@v0.11.3
+        with:
+          cache: false        # no pixi.lock committed; resolve fresh
+
+      # The robot model only (Apache MJCF + CC BY-NC-SA meshes, used for testing, not
+      # redistributed). The tests never need the Hugging Face policies: they use
+      # stand-in ONNX nets.
+      - name: Fetch microduck_rl
+        run: |
+          git clone --filter=blob:none https://github.com/pollen-robotics/microduck_rl "$MICRODUCK_RL_PATH"
+          git -C "$MICRODUCK_RL_PATH" checkout --quiet "$MICRODUCK_RL_COMMIT"
+
+      - name: Unit tests (observation parity with upstream, skills, sim, lidar, map)
+        run: pixi run test
+
+      - name: Build
+        run: pixi run build
+
+      - name: Integration tests (real nodes over ROS 2, skills, Nav2)
+        run: pixi run test-integration
+
+      - name: Upload launch logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: logs
+          path: |
+            /tmp/pytest-of-*/**/launch.log
+            .ws/log/
+          if-no-files-found: ignore
