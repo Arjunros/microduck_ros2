@@ -67,7 +67,14 @@ def test_rule_parser(text, expected):
 
 def test_rule_parser_gives_help_on_nonsense():
     turn = RuleBackend(FakeRobot()).complete("", [{"role": "user", "content": "sing me a song"}], [])
-    assert not turn.tool_calls and "didn't understand" in turn.text
+    assert not turn.tool_calls and "didn't understand" in turn.text and "kitchen" in turn.text
+
+
+def test_rule_parser_explains_missing_places():
+    robot = FakeRobot()
+    robot.places, robot.aliases = {}, {}
+    turn = RuleBackend(robot).complete("", [{"role": "user", "content": "go to the kitchen"}], [])
+    assert not turn.tool_calls and "make_map" in turn.text
 
 
 def test_agent_runs_a_plan_with_the_rule_backend():

@@ -29,7 +29,9 @@ def _ensure_map(context, *args, **kwargs):
     The places are useful in SLAM mode too: slam_toolbox's map frame starts at the
     duck's spawn pose, which is the scene origin."""
     path = os.path.expanduser(context.launch_configurations["map"])
-    if not os.path.isfile(path):
+    places = (path[:-5] if path.endswith(".yaml") else path) + "_places.yaml"
+    # Regenerate if either file is missing (maps made before places existed have no _places.yaml).
+    if not os.path.isfile(path) or not os.path.isfile(places):
         from microduck_sim.mapgen import main as make_map
         out = path[:-5] if path.endswith(".yaml") else path
         make_map(["--scene", context.launch_configurations["scene"],

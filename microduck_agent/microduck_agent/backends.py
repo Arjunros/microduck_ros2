@@ -70,10 +70,16 @@ class RuleBackend:
             return AssistantTurn(("Stopped: " if fails else "Done: ") + text)
         calls = self.parse(messages[last_user]["content"])
         if not calls:
+            places = sorted(self.robot.places)
+            hint = (f"Places I know: {', '.join(places)}." if places else
+                    "I don't know any places: generate them with `ros2 run microduck_sim make_map` "
+                    "(or pixi run map) and restart me.")
             return AssistantTurn(
-                "Sorry, I didn't understand. Try: 'go to the kitchen', 'turn left 90', 'walk forward 0.5', "
-                "'kick', 'roll', 'pick up', 'sit', 'stand', 'look left', 'where are you', 'stop'"
-                + (", 'go to the ball'" if self.robot.has_ball else "") + ".")
+                "Sorry, I didn't understand. Try: "
+                + ("'go to the kitchen', " if places else "")
+                + "'turn left 90', 'walk forward 0.5', 'kick', 'roll', 'pick up', 'sit', 'stand', "
+                "'look left', 'where are you', 'stop'"
+                + (", 'go to the ball'" if self.robot.has_ball else "") + ". " + hint)
         for i, c in enumerate(calls):
             c.id = f"rule_{i}"
         return AssistantTurn("", calls)
