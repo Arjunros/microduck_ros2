@@ -2,7 +2,9 @@
 
 Publishes   /clock, /joint_states, /imu/data, /odom (ground truth), /tf,
             /scan (virtual planar lidar, for Nav2),
-            /microduck/visual (MarkerArray: robot meshes + scene geoms, for RViz)
+            /microduck/visual (MarkerArray: scene geoms, for RViz),
+            /microduck/sim_qpos (full state for the camera node),
+            /microduck/ball (ground-truth ball position, ball scenes only)
 Subscribes  /microduck/joint_targets (sensor_msgs/JointState, positions in rad)
 Services    /microduck/reset, /microduck/place_ball_{left,right} (ball scenes)
 
@@ -22,12 +24,13 @@ import time
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import PointStamped, TransformStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import Imu, JointState, LaserScan
+from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import Trigger
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 from visualization_msgs.msg import Marker, MarkerArray
@@ -94,7 +97,12 @@ class MicroduckSimNode(Node):
         p("sync_timeout", 0.5)
         p("wait_for_policy", True)
         p("real_time_factor", 1.0)  # 0 = as fast as possible (sync mode only)
-        p("publish_visual", True)
+        p("publish_visual", True)          # scene geoms (+ robot meshes if publish_robot_markers)
+        p("publish_robot_markers", False)  # RViz shows the robot from the URDF instead
+        p("add_ball", False)               # add Pollen's kick ball to scenes that lack one
+        p("ball_x", 0.6)
+        p("ball_y", 0.0)
+        p("state_rate", 30.0)              # /microduck/sim_qpos for the camera node [Hz]
         p("visual_rate", 20.0)
         p("auto_reset_on_fall", False)
         p("odom_frame", "odom")
@@ -117,6 +125,7 @@ class MicroduckSimNode(Node):
         self.sim = MicroduckSim(
             scene, use_bam=gp("use_bam"), vin=gp("vin"), vin_drop_gain=gp("vin_drop_gain"),
             timestep=gp("timestep"), decimation=gp("decimation"), init_z=gp("init_z"),
+            add_ball=gp("add_ball"), ball_xy=(gp("ball_x"), gp("ball_y")),
         )
         self.get_logger().info(
             f"scene={scene} actuators={'BAM M6' if self.sim.use_bam else 'XML position (no BAM)'} "
@@ -146,6 +155,10 @@ class MicroduckSimNode(Node):
         self.pub_odom = self.create_publisher(Odometry, "/odom", 10)
         self.pub_scan = self.create_publisher(LaserScan, "/scan", qos_profile_sensor_data)
         self.pub_vis = self.create_publisher(MarkerArray, "/microduck/visual", 1)
+        self.pub_qpos = self.create_publisher(Float64MultiArray, "/microduck/sim_qpos", 1)
+        self.pub_ball = self.create_publisher(PointStamped, "/microduck/ball", 10)
+        self._state_period = 1.0 / max(gp("state_rate"), 1e-3)
+        self._last_qpos = -1e9
         self.tf = TransformBroadcaster(self)
         self.static_tf = StaticTransformBroadcaster(self)
         self.create_subscription(JointState, "/microduck/joint_targets", self._on_targets, qos)
@@ -170,11 +183,11 @@ class MicroduckSimNode(Node):
         self._reset_requested = False
         self._stop = False
 
-        self._visuals = self.sim.mesh_visuals() if gp("publish_visual") else []
+        self._visuals = self.sim.mesh_visuals() if gp("publish_visual") and gp("publish_robot_markers") else []
         self._visual_period = 1.0 / max(gp("visual_rate"), 1e-3)
         self._last_visual = -1e9
-        if gp("publish_visual"):
-            self.get_logger().info(f"publishing {len(self._visuals)} mesh markers on /microduck/visual")
+        if self._visuals:
+            self.get_logger().info(f"publishing {len(self._visuals)} robot mesh markers on /microduck/visual")
 
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -226,7 +239,7 @@ class MicroduckSimNode(Node):
                 with self._lock:
                     self.sim.reset()
                     self._got_any_targets = False
-                    self._last_visual = self._last_scan = -1e9
+                    self._last_visual = self._last_scan = self._last_qpos = -1e9
                 self._reset_requested = False
                 wall_start, sim_start = time.monotonic(), self.sim.time
                 self.get_logger().info("simulation reset")
@@ -236,8 +249,10 @@ class MicroduckSimNode(Node):
             self._publish_state()
 
             if self.wait_for_policy and not self._got_any_targets:
-                # Hold the robot frozen at its initial pose until a policy answers.
+                # Hold the robot frozen at its initial pose until a policy answers,
+                # republishing everything so late subscribers (camera, RViz) see it.
                 self._targets_event.wait(0.1)
+                self._last_qpos = self._last_visual = -1e9
                 wall_start, sim_start = time.monotonic(), self.sim.time
                 continue
 
@@ -273,11 +288,16 @@ class MicroduckSimNode(Node):
             st = self.sim.state()
             fx, fy, fyaw = self.sim.footprint_pose()
             vis = None
-            if self._visuals and (st.time - self._last_visual >= self._visual_period):
+            if (self._visuals or self._world_geoms) and st.time - self._last_visual >= self._visual_period:
                 vis = ([self.sim.geom_pose(v.geom_id) @ v.T_geom_mesh for v in self._visuals],
                        [(g, shape, self.sim.geom_pose(g), self.sim.model.geom_size[g].copy(),
                          self.sim.model.geom_rgba[g].copy()) for g, shape in self._world_geoms])
                 self._last_visual = st.time
+            qpos = None
+            if st.time - self._last_qpos >= self._state_period:
+                qpos = self.sim.qpos()
+                self._last_qpos = st.time
+            ball = self.sim.ball_position()
             ranges = None
             if self.publish_scan and st.time - self._last_scan >= self.scan_period:
                 ranges = self.sim.scan(self.scan_rays, self.scan_height, 0.05, self.scan_range_max)
@@ -354,6 +374,16 @@ class MicroduckSimNode(Node):
         if vis is not None:
             self._publish_visual(stamp, *vis)
 
+        if qpos is not None:
+            # [sim time, qpos...]: lets the camera node rebuild the exact scene.
+            self.pub_qpos.publish(Float64MultiArray(data=[st.time] + qpos.tolist()))
+        if ball is not None and qpos is not None:
+            pt = PointStamped()
+            pt.header.stamp = stamp
+            pt.header.frame_id = self.odom_frame
+            pt.point.x, pt.point.y, pt.point.z = map(float, ball)
+            self.pub_ball.publish(pt)
+
     def _publish_visual(self, stamp, robot_poses, world):
         arr = MarkerArray()
         for i, (v, T) in enumerate(zip(self._visuals, robot_poses)):
@@ -374,7 +404,8 @@ class MicroduckSimNode(Node):
             mk = Marker()
             mk.header.stamp = stamp
             mk.header.frame_id = self.odom_frame
-            mk.ns = "scene"
+            # static scene geoms vs moving objects (the ball), so RViz can toggle them separately
+            mk.ns = "scene" if self.sim.model.geom_bodyid[g] == 0 else "objects"
             mk.id = int(g)
             mk.type = shape
             mk.action = Marker.ADD

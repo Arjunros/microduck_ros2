@@ -5,27 +5,32 @@
 ROS 2 simulation and policy runtime for [Pollen Robotics' Microduck](https://github.com/pollen-robotics/microduck_rl),
 the 14-servo RL biped. It runs the robot in MuJoCo with the same BAM XL330 actuator model the policies are
 trained against, drives it with the official ONNX policies through standard ROS 2 topics, exposes its skills
-(kicks, roulade, ground pick, sit/stand) as services, and navigates an apartment with Nav2.
+(kicks, roulade, ground pick, sit/stand) as services, sees through its head camera, navigates an apartment
+with Nav2, and takes orders in plain English (typed or spoken) through an LLM agent.
 
 > Community project. Not affiliated with or endorsed by Pollen Robotics.
 
 ```
-   /cmd_vel  /microduck/head_cmd  /microduck/body_cmd   /microduck/skill/*  /microduck/sit|stand
-                                  │                            │
+  "go to the kitchen and sit" ─▶ microduck_agent (rule parser | Ollama | OpenAI | Claude)
+                                    │ Nav2 goals, /cmd_vel, skills, head, camera
+   /cmd_vel /microduck/head_cmd     ▼                  /microduck/skill/*  /microduck/sit|stand
    ┌───────────────┐  /joint_states, /imu/data   ┌──────────────────────────┐
    │ microduck_sim │ ─────────────────────────▶ │ microduck_policy         │
    │ MuJoCo + BAM  │ ◀───────────────────────── │ ONNX 61 → 14, skill FSM  │
    └───────────────┘   /microduck/joint_targets  └──────────────────────────┘
-     │ /clock /odom /tf /scan /microduck/visual            ▲ /cmd_vel
-     └──────────────────────────────▶ Nav2 + map_server / slam_toolbox
+     │ /clock /odom /tf /scan /microduck/sim_qpos          ▲ /cmd_vel
+     ├──▶ camera_node ──▶ /camera/image_raw, /camera/depth/image_raw
+     ├──▶ robot_state_publisher (URDF generated from the MuJoCo model) ──▶ /tf
+     └──▶ Nav2 + map_server / slam_toolbox
 ```
 
 ## Packages
 
 | Package | What it does |
 |---|---|
-| `microduck_sim` | MuJoCo sim at 200 Hz physics / 50 Hz control with BAM M6 XL330 actuators (voltage, back-EMF, load-dependent friction). Publishes state, ground-truth odometry, Nav2-style TF, a virtual lidar, and RViz meshes. Scenes: `flat`, `ball`, `apartment`. Also `make_map`, which rasterizes a scene into a Nav2 map. |
+| `microduck_sim` | MuJoCo sim at 200 Hz physics / 50 Hz control with BAM M6 XL330 actuators (voltage, back-EMF, load-dependent friction). Publishes state, ground-truth odometry, Nav2-style TF and a virtual lidar. Scenes: `flat`, `ball`, `apartment` (+ `ball:=true` anywhere). Also `camera_node` (head camera, RGB + depth), `make_urdf` (URDF generated from the MuJoCo model) and `make_map` (Nav2 map + named rooms from a scene). |
 | `microduck_policy` | Builds the 61D observation exactly like Pollen's `infer_policy.py`, runs the walking policy, and runs skills with the same rules as Pollen's on-robot daemon (`robotd`), read from the policy set's `manifest.json`. |
+| `microduck_agent` | Natural-language control. An LLM (or an offline rule parser) turns requests into tool calls: go to a room, go to the ball, walk, turn, skills, look, take a picture, stop. Text chat CLI and push-to-talk voice. |
 | `microduck_bringup` | Launch files (`sim`, `nav`), Nav2 and slam_toolbox params, RViz configs, gamepad skill mapping, integration tests. |
 
 ## Install
@@ -50,13 +55,13 @@ installs don't mix.
 
 ### Option B: Docker
 
-Builds the same pixi environment, with the model, policies and map baked in:
+Builds the CI-tested pixi environment (with software OpenGL for the camera), with the model, policies and map baked in:
 
 ```bash
 docker build -t microduck_ros2 .
 xhost +local:docker
 docker run --rm -it --net=host -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix microduck_ros2              # sim
-docker run --rm -it --net=host -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix microduck_ros2 pixi run nav # Nav2
+docker run --rm -it --net=host -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix microduck_ros2 pixi run -e ci nav # Nav2
 ```
 
 The image contains Pollen's non-commercial meshes, so keep it local; don't push it to a public registry.
@@ -65,7 +70,7 @@ The image contains Pollen's non-commercial meshes, so keep it local; don't push 
 
 ```bash
 cd ~/ros2_ws/src && git clone https://github.com/<you>/microduck_ros2
-pip install --break-system-packages mujoco onnxruntime huggingface_hub \
+pip install --break-system-packages mujoco onnxruntime huggingface_hub pillow \
   "better-actuator-models @ git+https://github.com/Rhoban/bam.git@62bd8ce12154340be97e06f7f41a0ca8f116d967"
 sudo apt install ros-jazzy-navigation2 ros-jazzy-slam-toolbox ros-jazzy-teleop-twist-keyboard ros-jazzy-teleop-twist-joy
 ./microduck_ros2/scripts/fetch_microduck_assets.sh
@@ -109,6 +114,35 @@ see zero head/body commands while sit/stand keeps them live. A stand requested b
 **Gamepad:** `pixi run sim joy:=true`. Hold LB and use the sticks to walk; A ground pick, B kick right,
 RB kick left, X roulade, Y sit/stand.
 
+## Head camera
+
+On by default (`camera:=false` to skip). `camera_node` renders MuJoCo's `head_camera` at the real sensor's
+640×360 / 15 fps and publishes `/camera/image_raw` (rgb8), `/camera/depth/image_raw` (32FC1, metres) and
+`/camera/camera_info`, in `head_camera_optical_frame`. It runs in its own process, so rendering never slows
+the physics.
+
+Two corrections, both applied to the shared model so the TF frame matches the image exactly:
+
+- **The model's camera faces backwards.** Pollen's own simulator notes this and turns it 180°; we do the same.
+- **It's mounted a quarter turn off**, like the real sensor. We turn it upright for ROS consumers, so the
+  image's up is the world's up.
+
+It picks an OpenGL backend automatically (EGL, then GLFW, then OSMesa). On a machine with no GPU, use the
+pixi `ci` environment, which adds Mesa's software renderer: `pixi run -e ci sim`. It's slow, but it works.
+
+## URDF and TF
+
+`robot_state_publisher` gets a URDF generated at launch from the MuJoCo model (`ros2 run microduck_sim
+make_urdf` writes it out). Kinematics come straight from MuJoCo, and a test checks every link, the camera and
+the IMU match MuJoCo's forward kinematics to 1e-7 m. RViz shows the robot with `RobotModel`, and frames such as
+`head_camera_optical_frame`, `imu`, `tof`, `left_foot` and `right_foot` are on `/tf` for other tools (Foxglove,
+MoveIt, image_proc).
+
+```
+odom → base_footprint → trunk_base → hips, legs, feet, neck → head → head_camera_optical_frame
+                     └→ laser_link
+```
+
 ## Navigate (Nav2)
 
 ```bash
@@ -123,6 +157,46 @@ Two simplifications, both sim-only: odometry is ground truth (so in map mode `ma
 `/scan` comes from a **virtual planar lidar** (360 rays at 12 cm height, ray-cast against the scene and
 ignoring the robot). The real Microduck has no lidar; a camera- or ToF-based scan would replace it.
 
+`make_map` also writes `apartment_places.yaml`: one reachable point per room (kitchen, living room,
+bedroom, office, bathroom, the corridors, start), found from the scene's floor geometry, plus aliases
+like "sofa" or "home". Edit it to add your own spots.
+
+## Talk to it
+
+```bash
+pixi run nav agent:=true ball:=true      # sim + Nav2 + agent, with a ball in the living room
+pixi run chat                            # second terminal
+```
+```
+you> go to the ball and kick it
+duck: Done: next to the ball, facing it; did kick right
+you> go to the kitchen then sit
+you> turn around and walk forward 30 cm
+you> where are you?
+you> stop                                # handled at once, even mid-walk
+```
+
+Pick the brain with `backend:=`:
+
+| backend | needs | notes |
+|---|---|---|
+| `rule` (default) | nothing | Offline keyword parser: rooms, "then", turns, distances, skills, look, stop. |
+| `ollama` | [Ollama](https://ollama.com) + a tool-calling model | `backend:=ollama model:=<model>`. Free and local. |
+| `openai` | `OPENAI_API_KEY` | `backend:=openai model:=<model>`. Any OpenAI-compatible server works with `base_url:=`. |
+| `anthropic` | `ANTHROPIC_API_KEY` | `backend:=anthropic` (default model `claude-haiku-5-5`, or `model:=`). |
+
+With an LLM backend the agent plans multi-step requests itself, and with a vision-capable model it can
+**look**: "what's in front of you?" calls `see`, which sends the head-camera image to the model.
+
+**Voice (experimental):** `pixi run -e voice voice`. Press Enter, speak, press Enter. Speech-to-text is
+faster-whisper running locally (it downloads its model on first use), and replies are spoken with `espeak-ng`
+if installed (`sudo apt install espeak-ng`). Anything else that publishes text to `/microduck/command` works
+too, e.g. your own assistant.
+
+The agent publishes on `/microduck/agent/reply` and `/microduck/agent/events` (tool calls, for UIs). In the
+apartment, `go_to_ball` reads the ball's ground-truth position from `/microduck/ball`, a sim-only shortcut
+that ball detection on `/camera/image_raw` would replace on a real robot.
+
 ## Topics and services
 
 | Name | Type | |
@@ -132,7 +206,12 @@ ignoring the robot). The real Microduck has no lidar; a camera- or ToF-based sca
 | `/odom` | ground truth, `odom → base_footprint` | sim → |
 | `/tf` | `odom → base_footprint → trunk_base`, `base_footprint → laser_link` | sim → |
 | `/scan` | `sensor_msgs/LaserScan` (virtual lidar) | sim → |
-| `/microduck/visual` | `visualization_msgs/MarkerArray` (robot meshes + scene) | sim → |
+| `/microduck/visual` | `visualization_msgs/MarkerArray` (scene geoms; namespaces `scene`, `objects`) | sim → |
+| `/microduck/sim_qpos` | full state for the camera node | sim → |
+| `/microduck/ball` | `geometry_msgs/PointStamped` (ball scenes) | sim → |
+| `/camera/image_raw`, `/camera/depth/image_raw`, `/camera/camera_info` | head camera | camera → |
+| `/robot_description` | URDF | robot_state_publisher → |
+| `/microduck/command` → `/microduck/agent/reply`, `/microduck/agent/events` | `std_msgs/String` | agent |
 | `/clock` | sim time | sim → |
 | `/microduck/joint_targets` | `sensor_msgs/JointState` (positions, rad) | policy → sim |
 | `/microduck/policy_state` | `std_msgs/String` | policy → |
@@ -163,8 +242,8 @@ ros2 topic pub --once /microduck/body_cmd std_msgs/Float64MultiArray "{data: [0,
 ## Tests
 
 ```bash
-pixi run test                 # unit: obs parity with upstream, skills FSM, sim, lidar, map
-pixi run test-integration     # real nodes over ROS 2: sync loop, every skill, Nav2 planning
+pixi run test                 # unit: obs parity, skills FSM, sim, lidar, map, URDF kinematics, agent + backends
+pixi run -e ci test-integration   # real nodes over ROS 2: sync loop, skills, Nav2, camera + TF, agent → Nav2
 ```
 
 CI runs both on every push. The tests use stand-in ONNX nets, so they check plumbing and timing, not gait quality.
@@ -173,7 +252,7 @@ CI runs both on every push. The tests use stand-in ONNX nets, so they check plum
 
 - Feed-forward policies only. Recurrent (`model_api: 2`) policies are refused with a clear error.
 - No hardware driver yet. The topic interface is designed so a `microduck_hardware` node can replace the sim.
-- No URDF yet: RViz shows the robot through mesh markers published by the sim.
+- The voice front-end hasn't been tested with a microphone in CI.
 - Roller-skate mode (`roller.onnx`) needs the roller model and isn't wired up.
 
 ## License

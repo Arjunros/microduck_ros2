@@ -36,14 +36,15 @@ jobs:
           git clone --filter=blob:none https://github.com/pollen-robotics/microduck_rl "$MICRODUCK_RL_PATH"
           git -C "$MICRODUCK_RL_PATH" checkout --quiet "$MICRODUCK_RL_COMMIT"
 
-      - name: Unit tests (observation parity with upstream, skills, sim, lidar, map)
-        run: pixi run test
+      # The `ci` environment adds Mesa so MuJoCo can render the head camera without a GPU.
+      - name: Unit tests (obs parity with upstream, skills, sim, lidar, map, URDF kinematics, agent)
+        run: pixi run -e ci test
 
       - name: Build
-        run: pixi run build
+        run: pixi run -e ci build
 
-      - name: Integration tests (real nodes over ROS 2, skills, Nav2)
-        run: pixi run test-integration
+      - name: Integration tests (real nodes over ROS 2: sync loop, skills, Nav2, camera + TF, agent)
+        run: pixi run -e ci test-integration
 
       - name: Upload launch logs on failure
         if: failure()

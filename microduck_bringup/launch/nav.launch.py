@@ -2,6 +2,7 @@
 
   ros2 launch microduck_bringup nav.launch.py              # known map (generated from the scene)
   ros2 launch microduck_bringup nav.launch.py mode:=slam   # build the map with slam_toolbox as it walks
+  ros2 launch microduck_bringup nav.launch.py agent:=true ball:=true   # + talk to it: ros2 run microduck_agent chat
 
 Then click "2D Goal Pose" in RViz.
 
@@ -14,18 +15,19 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
-from launch.conditions import LaunchConfigurationEquals
+from launch.conditions import IfCondition, LaunchConfigurationEquals
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 NAV_NODES = ["controller_server", "planner_server", "behavior_server", "velocity_smoother", "bt_navigator"]
 
 
 def _ensure_map(context, *args, **kwargs):
-    """Generate the ground-truth map on first use."""
-    if context.launch_configurations.get("mode") != "map":
-        return []
+    """Generate the ground-truth map (and its named places) on first use.
+
+    The places are useful in SLAM mode too: slam_toolbox's map frame starts at the
+    duck's spawn pose, which is the scene origin."""
     path = os.path.expanduser(context.launch_configurations["map"])
     if not os.path.isfile(path):
         from microduck_sim.mapgen import main as make_map
@@ -33,6 +35,8 @@ def _ensure_map(context, *args, **kwargs):
         make_map(["--scene", context.launch_configurations["scene"],
                   "--microduck-rl-path", context.launch_configurations["microduck_rl_path"],
                   "--out", out])
+    if context.launch_configurations.get("mode") != "map":
+        return []
     return [Node(package="nav2_map_server", executable="map_server", name="map_server", output="screen",
                  parameters=[context.launch_configurations["nav_params"],
                              {"yaml_filename": path, "use_sim_time": True}]),
@@ -61,6 +65,17 @@ def generate_launch_description():
         DeclareLaunchArgument("walking_policy", default_value=""),
         DeclareLaunchArgument("use_bam", default_value="true"),
         DeclareLaunchArgument("joy", default_value="false"),
+        DeclareLaunchArgument("ball", default_value="false", description="Put a ball in the apartment"),
+        DeclareLaunchArgument("ball_x", default_value="-2.0", description="default: the living room"),
+        DeclareLaunchArgument("ball_y", default_value="-0.8"),
+        DeclareLaunchArgument("camera", default_value="true"),
+        DeclareLaunchArgument("gl_backend", default_value="auto"),
+        # natural-language agent
+        DeclareLaunchArgument("agent", default_value="false", description="Start the language agent"),
+        DeclareLaunchArgument("backend", default_value="rule", description="rule | ollama | openai | anthropic"),
+        DeclareLaunchArgument("model", default_value=""),
+        DeclareLaunchArgument("base_url", default_value=""),
+        DeclareLaunchArgument("api_key_env", default_value=""),
     ]
     lc = LaunchConfiguration
     nav_params = lc("nav_params")
@@ -73,6 +88,8 @@ def generate_launch_description():
             "policy_dir": lc("policy_dir"), "walking_policy": lc("walking_policy"),
             "use_bam": lc("use_bam"), "joy": lc("joy"), "rviz": lc("rviz"),
             "rviz_config": os.path.join(share, "rviz", "nav.rviz"),
+            "ball": lc("ball"), "ball_x": lc("ball_x"), "ball_y": lc("ball_y"),
+            "camera": lc("camera"), "gl_backend": lc("gl_backend"),
         }.items(),
     )
 
@@ -105,4 +122,11 @@ def generate_launch_description():
              parameters=[{"use_sim_time": True, "autostart": True, "node_names": NAV_NODES,
                           "bond_timeout": 10.0}]),
     ]
-    return LaunchDescription(args + [sim, OpaqueFunction(function=_ensure_map), map_to_odom, slam] + nav)
+    agent = Node(
+        package="microduck_agent", executable="agent_node", name="microduck_agent", output="screen",
+        parameters=[sim_time, {"backend": lc("backend"), "model": lc("model"), "base_url": lc("base_url"),
+                               "api_key_env": lc("api_key_env"),
+                               "places_file": PythonExpression(["'", lc("map"), "'[:-5] + '_places.yaml'"])}],
+        condition=IfCondition(lc("agent")),
+    )
+    return LaunchDescription(args + [sim, OpaqueFunction(function=_ensure_map), map_to_odom, slam] + nav + [agent])

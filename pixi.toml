@@ -6,7 +6,9 @@
 #   pixi run sim                  # walk on the flat floor (velstand + all skills)
 #   pixi run sim scene:=ball      # with a ball to kick
 #   pixi run nav                  # Nav2 in the apartment (pixi run nav mode:=slam to map it)
+#   pixi run nav agent:=true ball:=true   then   pixi run chat   # talk to it
 #   pixi run keyboard             # second terminal
+#   pixi run -e voice voice       # speak to it (extra download: speech model)
 [workspace]
 name = "microduck_ros2"
 channels = ["https://conda.anaconda.org/robostack-jazzy", "https://conda.anaconda.org/conda-forge"]
@@ -34,6 +36,9 @@ onnxruntime = "*"
 pytest = "*"
 onnx = "*"
 huggingface_hub = "*"
+pillow = "*"
+pyyaml = "*"
+ros-jazzy-robot-state-publisher = "*"
 pip = "*"
 
 [pypi-dependencies]
@@ -43,9 +48,34 @@ numpy-stl = "*"
 [tasks]
 fetch = "bash scripts/fetch_microduck_assets.sh"
 build = { cmd = "mkdir -p .ws/src && touch .ws/COLCON_IGNORE && ln -sfn $PIXI_PROJECT_ROOT .ws/src/microduck_ros2 && cd .ws && colcon build --symlink-install --base-paths src" }
-test = "PYTHONPATH=microduck_policy:microduck_sim python -m pytest -q microduck_policy/test microduck_sim/test"
+test = "PYTHONPATH=microduck_policy:microduck_sim:microduck_agent python -m pytest -q microduck_policy/test microduck_sim/test microduck_agent/test"
 test-integration = { cmd = "bash -c 'source .ws/install/setup.bash && python -m pytest -q -s microduck_bringup/test'", depends-on = ["build"] }
 sim = { cmd = "bash -c 'source .ws/install/setup.bash && ros2 launch microduck_bringup sim.launch.py \"$@\"' --" }
 nav = { cmd = "bash -c 'source .ws/install/setup.bash && ros2 launch microduck_bringup nav.launch.py \"$@\"' --" }
 map = { cmd = "bash -c 'source .ws/install/setup.bash && ros2 run microduck_sim make_map \"$@\"' --" }
 keyboard = { cmd = "bash -c 'source .ws/install/setup.bash && ros2 run teleop_twist_keyboard teleop_twist_keyboard'" }
+chat = { cmd = "bash -c 'source .ws/install/setup.bash && ros2 run microduck_agent chat \"$@\"' --" }
+voice = { cmd = "bash -c 'source .ws/install/setup.bash && ros2 run microduck_agent voice \"$@\"' --" }
+
+# Speech in/out for `pixi run -e voice voice` (faster-whisper downloads its model on first use).
+[feature.voice.dependencies]
+portaudio = "*"
+
+[feature.voice.pypi-dependencies]
+faster-whisper = "*"
+sounddevice = "*"
+
+# Software OpenGL (Mesa llvmpipe via EGL) for machines without a GPU, e.g. CI.
+# Slow, but lets the camera render anywhere: pixi run -e ci test-integration
+[feature.ci.dependencies]
+mesalib = "*"
+pyopengl = "*"
+
+[feature.ci.activation.env]
+MUJOCO_GL = "egl"
+LD_LIBRARY_PATH = "$CONDA_PREFIX/lib"
+__EGL_VENDOR_LIBRARY_FILENAMES = "$CONDA_PREFIX/share/glvnd/egl_vendor.d/50_mesa.json"
+
+[environments]
+voice = ["voice"]
+ci = ["ci"]

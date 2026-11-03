@@ -49,6 +49,63 @@ BALL_OFFSET_ABS_Y = 0.042
 BALL_RADIUS = 0.035
 
 
+def _quat_mul(a, b):
+    out = np.zeros(4)
+    mujoco.mju_mulQuat(out, np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64))
+    return out
+
+
+def _fix_head_camera(spec, name="head_camera"):
+    """Make the model's head camera look forward and upright.
+
+    The MJCF camera faces backwards (pollen-robotics/microduck_rl sim/camera.py:
+    its view direction is -x where the body's forward axis is +x). Pollen turns it
+    180 deg about the camera's right axis, which leaves the image a quarter turn
+    off, like the real sensor's mounting. For ROS consumers we also turn it about
+    the view axis so "up" in the image is up in the world. Applied to the spec, so
+    the sim, the camera node and the URDF all share the corrected camera.
+    """
+    cams = [c for c in spec.cameras if c.name == name]
+    if not cams:
+        return
+    cam = cams[0]
+    flipped = _quat_mul(cam.quat, [0.0, 1.0, 0.0, 0.0])  # 180 deg about the camera's x (right) axis
+    c = np.cos(np.pi / 4)
+    best, best_up = None, -np.inf
+    for q_roll in ([c, 0.0, 0.0, c], [c, 0.0, 0.0, -c]):  # +-90 deg about the view axis
+        cand = _quat_mul(flipped, q_roll)
+        cam.quat = cand
+        m = spec.compile()
+        d = mujoco.MjData(m)
+        qadr = [m.jnt_qposadr[m.actuator_trnid[i, 0]] for i in range(m.nu)]
+        if len(qadr) == len(STAND_POSE):
+            d.qpos[qadr] = STAND_POSE
+        mujoco.mj_kinematics(m, d)
+        mujoco.mj_camlight(m, d)
+        cid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_CAMERA, name)
+        up_z = d.cam_xmat[cid].reshape(3, 3)[2, 1]  # camera +y (image up) . world z
+        if up_z > best_up:
+            best, best_up = cand, up_z
+    cam.quat = best
+
+
+def load_scene_spec(scene_path, add_ball=False, ball_xy=(0.6, 0.0)):
+    """MjSpec of a scene, optionally with Pollen's kick ball added (70 mm, 15 g,
+    hollow) when the scene doesn't have one. Shared by the sim, the camera and
+    the URDF generator so all three see the same model."""
+    spec = mujoco.MjSpec.from_file(scene_path)
+    _fix_head_camera(spec)
+    if add_ball and not any(j.name == BALL_FREEJOINT for j in spec.joints):
+        body = spec.worldbody.add_body(name="ball", pos=[ball_xy[0], ball_xy[1], BALL_RADIUS])
+        body.add_freejoint(name=BALL_FREEJOINT)
+        body.mass = 0.015
+        body.inertia = [1.225e-5, 1.225e-5, 1.225e-5]
+        body.explicitinertial = True
+        body.add_geom(name="ball_geom", type=mujoco.mjtGeom.mjGEOM_SPHERE, size=[BALL_RADIUS, 0, 0],
+                      rgba=[1, 0.55, 0, 1], friction=[0.5, 0.005, 0.0001])
+    return spec
+
+
 def bam_available():
     try:
         import bam.model  # noqa: F401
@@ -83,6 +140,7 @@ class MeshVisual:
 
 class MicroduckSim:
     def __init__(self, scene_path, use_bam=True, vin=BAM_VIN, vin_drop_gain=BAM_VIN_DROP_GAIN,
+                 add_ball=False, ball_xy=(0.6, 0.0),
                  kp_fw=BAM_KP_FW, timestep=0.005, decimation=4, init_z=0.125,
                  init_keyframe="STAND"):
         if not os.path.isfile(scene_path):
@@ -102,7 +160,8 @@ class MicroduckSim:
             use_bam = False
         self.use_bam = use_bam
 
-        self.spec = mujoco.MjSpec.from_file(self.scene_path)
+        self.spec = load_scene_spec(self.scene_path, add_ball, ball_xy)
+        self._ball_home = (float(ball_xy[0]), float(ball_xy[1]))
         if use_bam:
             self._load_with_bam(vin, vin_drop_gain, kp_fw, timestep)
         else:
@@ -253,6 +312,16 @@ class MicroduckSim:
     @property
     def has_ball(self):
         return self._ball_qpos is not None
+
+    def ball_position(self):
+        """World position of the ball, or None. (Ground truth: a sim-only shortcut.)"""
+        if not self.has_ball:
+            return None
+        return self.data.qpos[self._ball_qpos:self._ball_qpos + 3].copy()
+
+    def qpos(self):
+        """Full generalized position (robot + ball), for kinematic replicas such as the camera."""
+        return self.data.qpos.copy()
 
     def place_ball(self, side):
         """Put the ball in front of the left/right foot, as the kick training reset does."""

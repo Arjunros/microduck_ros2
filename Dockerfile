@@ -3,7 +3,7 @@
 #   docker build -t microduck_ros2 .
 #   xhost +local:docker          # allow the container to open RViz on your screen
 #   docker run --rm -it --net=host -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix microduck_ros2
-#   docker run --rm -it --net=host -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix microduck_ros2 pixi run nav
+#   docker run --rm -it --net=host -e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix microduck_ros2 pixi run -e ci nav
 #
 # The robot meshes (CC BY-NC-SA 4.0) and Pollen's policies are downloaded at build
 # time into this local image. Don't push the image to a public registry.
@@ -24,9 +24,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /microduck_ros2
 COPY pixi.toml ./
-RUN pixi install
+# The `ci` environment adds software OpenGL, so the head camera renders without GPU passthrough.
+RUN pixi install -e ci
 
 COPY . .
-RUN pixi run fetch && pixi run build && pixi run map
+RUN pixi run -e ci fetch && pixi run -e ci build && pixi run -e ci map
 
-CMD ["pixi", "run", "sim"]
+CMD ["pixi", "run", "-e", "ci", "sim"]

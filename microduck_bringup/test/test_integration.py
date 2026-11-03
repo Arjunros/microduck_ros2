@@ -183,3 +183,87 @@ def test_nav2_plans_across_the_apartment(node, fake_set, tmp_path):
     assert os.path.isfile(tmp_path / "apartment.yaml")                       # generated on first use
     end = got["plan"].poses[-1].pose.position
     assert len(got["plan"].poses) > 50 and abs(end.x + 2.5) < 0.1 and abs(end.y - 1.8) < 0.1
+
+
+def _renderer_available():
+    from microduck_sim.camera_node import pick_gl_backend
+    return pick_gl_backend("auto", log=lambda m: None) is not None
+
+
+def test_camera_urdf_and_tf(node, fake_set, tmp_path):
+    if not _renderer_available():
+        pytest.skip("no OpenGL backend for MuJoCo here (use the pixi 'ci' environment)")
+    import tf2_ros
+    from geometry_msgs.msg import PointStamped
+    from rclpy.qos import qos_profile_sensor_data
+    from sensor_msgs.msg import CameraInfo, Image
+    from std_msgs.msg import String
+    got = {}
+    for topic, typ, key in (("/camera/image_raw", Image, "rgb"), ("/camera/depth/image_raw", Image, "depth"),
+                            ("/camera/camera_info", CameraInfo, "info")):
+        node.create_subscription(typ, topic, lambda m, k=key: got.__setitem__(k, m), qos_profile_sensor_data)
+    node.create_subscription(PointStamped, "/microduck/ball", lambda m: got.__setitem__("ball", m), 10)
+    from rclpy.qos import DurabilityPolicy, QoSProfile
+    node.create_subscription(String, "/robot_description", lambda m: got.__setitem__("urdf", m.data),
+                             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+    buf = tf2_ros.Buffer()
+    tf2_ros.TransformListener(buf, node)
+    launch = Launch("sim.launch.py", f"policy_dir:={fake_set}", "scene:=apartment", "ball:=true",
+                    "camera_rate:=2.0", log=str(tmp_path / "launch.log"))
+    try:
+        assert _spin(node, 120, lambda: {"rgb", "depth", "info", "ball", "urdf"} <= set(got)), sorted(got)
+        _spin(node, 3)
+        tf = buf.lookup_transform("odom", "head_camera_optical_frame", rclpy.time.Time())
+    finally:
+        launch.stop()
+    rgb, depth, info = got["rgb"], got["depth"], got["info"]
+    assert (rgb.width, rgb.height, rgb.encoding) == (640, 360, "rgb8")
+    assert rgb.header.frame_id == "head_camera_optical_frame" == info.header.frame_id
+    d = np.frombuffer(bytes(depth.data), np.float32)
+    assert depth.encoding == "32FC1" and np.isfinite(d).all() and 0.0 < d.min() and d.max() <= 15.0
+    assert abs(info.k[0] - (360 / 2) / np.tan(np.radians(45) / 2)) < 1e-6      # fx from the 45 deg fovy
+    assert '<joint name="head_yaw" type="revolute">' in got["urdf"]
+    assert 0.0 < tf.transform.translation.z < 0.4                                # camera on the duck's head
+
+
+def _agent_probe(node):
+    from std_msgs.msg import String
+    replies = []
+    node.create_subscription(String, "/microduck/agent/reply", lambda m: replies.append(m.data), 10)
+    pub = node.create_publisher(String, "/microduck/command", 10)
+
+    def say(text, timeout=60):
+        n = len(replies)
+        pub.publish(String(data=text))
+        assert _spin(node, timeout, lambda: len(replies) > n), f"no reply to {text!r}"
+        return replies[-1]
+    return say
+
+
+def test_agent_drives_nav2(node, fake_set, tmp_path):
+    from nav_msgs.msg import Path
+    plans = []
+    node.create_subscription(Path, "/plan", lambda m: plans.append(m), 10)
+    launch = Launch("nav.launch.py", f"policy_dir:={fake_set}", f"map:={tmp_path}/apartment.yaml",
+                    "agent:=true", "camera:=false", log=str(tmp_path / "launch.log"))
+    try:
+        from std_msgs.msg import String
+        say = _agent_probe(node)
+        assert _spin(node, 90, lambda: node.count_publishers("/microduck/agent/reply") > 0)
+        _spin(node, 5)
+        reply = say("where are you?")
+        assert "nearest place: start" in reply, reply
+        import yaml
+        kitchen = yaml.safe_load(open(tmp_path / "apartment_places.yaml"))["places"]["kitchen"]
+        # Nav2 activates last; the agent's goal is rejected until then, so ask until it plans.
+        cmd = node.create_publisher(String, "/microduck/command", 10)
+        for _ in range(6):
+            cmd.publish(String(data="go to the kitchen"))
+            if _spin(node, 15, lambda: bool(plans)):
+                break
+        assert plans, "the agent never got Nav2 to plan"
+        end = plans[-1].poses[-1].pose.position
+        assert abs(end.x - kitchen["x"]) < 0.1 and abs(end.y - kitchen["y"]) < 0.1
+        assert say("stop", timeout=10) == "Stopped."
+    finally:
+        launch.stop()

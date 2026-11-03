@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>microduck_sim</name>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
   <description>MuJoCo simulation of Pollen Robotics Microduck for ROS 2, with the BAM XL330 actuator model used in training.</description>
   <maintainer email="projecthumanoidx@gmail.com">Arjun</maintainer>
   <license>Apache-2.0</license>
@@ -16,6 +16,7 @@
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>tf2_ros_py</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <!-- mujoco and better-actuator-models (BAM) are installed with pip -->
 
