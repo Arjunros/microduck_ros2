@@ -21,7 +21,7 @@ microduck_policy:
     action_scale: -1.0       # <0: from manifest.json next to the .onnx, else 1.0
     switch_threshold: 0.05   # |twist| at or below this -> standing policy (if given)
     cmd_timeout: 0.5
-    vx_limits: [-0.3, 0.3]
-    vy_limits: [-0.2, 0.2]
-    wz_limits: [-1.5, 1.5]
+    vx_limits: [-0.4, 0.4]   # the walking policy's training ranges
+    vy_limits: [-0.3, 0.3]
+    wz_limits: [-1.0, 1.0]
     publish_debug: false

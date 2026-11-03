@@ -49,11 +49,14 @@ ACTION_DIM = NUM_JOINTS
 
 CONTROL_HZ = 50.0
 
-# Velocity command limits used by Pollen's CPU rehearsal for the walking model.
+# Velocity command limits: the walking task's training ranges
+# (microduck_velocity_env_cfg.py), which are also Pollen's gamepad limits ([pad_drive]).
+# Commands are aspirational: velstand v8 achieves ~0.17 m/s for 0.4, and in-place yaw
+# below ~0.6 rad/s barely turns (docs/velstand_policy.md).
 VEL_LIMITS = {
-    "vx": (-0.3, 0.3),
-    "vy": (-0.2, 0.2),
-    "wz": (-1.5, 1.5),
+    "vx": (-0.4, 0.4),
+    "vy": (-0.3, 0.3),
+    "wz": (-1.0, 1.0),
 }
 
 # Body pose command limits (training constants).

@@ -91,9 +91,9 @@ def generate_launch_description():
         package="teleop_twist_joy", executable="teleop_node", name="teleop_twist_joy",
         parameters=[{
             "enable_button": 4,              # LB, hold to drive
-            "axis_linear.x": 1, "scale_linear.x": 0.3,
-            "axis_linear.y": 0, "scale_linear.y": 0.2,
-            "axis_angular.yaw": 3, "scale_angular.yaw": 1.5,
+            "axis_linear.x": 1, "scale_linear.x": 0.4,       # the policy's trained command range
+            "axis_linear.y": 0, "scale_linear.y": 0.3,
+            "axis_angular.yaw": 3, "scale_angular.yaw": 1.0,
         }],
         condition=joy_cond,
     )

@@ -152,7 +152,7 @@ class RosRobot(Robot):
         if start is None:
             return ToolResult(False, "no odometry")
         v = math.copysign(self.n.walk_speed, d)
-        deadline = time.monotonic() + abs(d) / self.n.walk_speed * 3 + 2
+        deadline = time.monotonic() + abs(d) / self.n.walk_speed * 5 + 3   # it walks slower than asked
         moved = 0.0
         while moved < abs(d) and time.monotonic() < deadline and not self.n.agent.cancel.is_set():
             self.n.drive(v, 0.0)
@@ -170,7 +170,7 @@ class RosRobot(Robot):
             return ToolResult(False, "no odometry")
         w = math.copysign(self.n.turn_speed, target)
         turned, last = 0.0, start[2]
-        deadline = time.monotonic() + abs(target) / self.n.turn_speed * 3 + 2
+        deadline = time.monotonic() + abs(target) / self.n.turn_speed * 3 + 3
         while abs(turned) < abs(target) and time.monotonic() < deadline and not self.n.agent.cancel.is_set():
             self.n.drive(0.0, w)
             time.sleep(0.05)
@@ -249,8 +249,8 @@ class AgentNode(Node):
         p("base_url", "")
         p("api_key_env", "")
         p("places_file", os.path.expanduser("~/microduck_maps/apartment_places.yaml"))
-        p("walk_speed", 0.15)
-        p("turn_speed", 0.6)
+        p("walk_speed", 0.3)     # commanded; velstand achieves well under half (see nav2.yaml)
+        p("turn_speed", 1.0)     # in-place yaw is only tracked from ~0.6 rad/s up
         p("nav_timeout", 180.0)
         gp = lambda n: self.get_parameter(n).value  # noqa: E731
 

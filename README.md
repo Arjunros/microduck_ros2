@@ -162,7 +162,9 @@ pixi run nav mode:=slam      # build the map with slam_toolbox while it walks
 ```
 
 Click **2D Goal Pose** in RViz. The apartment is Pollen's 6-room, ~7 × 6 m flat from `microduck_rl`. Nav2 uses
-Regulated Pure Pursuit at 0.2 m/s (inside velstand's trained range), NavFn, and a velocity smoother.
+Regulated Pure Pursuit, NavFn and a velocity smoother, tuned to how velstand actually responds (from Pollen's
+evaluation): it commands the top of the trained range (0.4 m/s, 1.0 rad/s turning) because the gait walks at
+under half its commanded speed and barely turns in place below ~0.6 rad/s.
 
 Two simplifications, both sim-only: odometry is ground truth (so in map mode `map → odom` is identity), and
 `/scan` comes from a **virtual planar lidar** (360 rays at 12 cm height, ray-cast against the scene and
