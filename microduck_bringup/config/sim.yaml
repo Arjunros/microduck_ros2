@@ -1,0 +1,27 @@
+microduck_sim:
+  ros__parameters:
+    # scene is relative to microduck_rl_path unless absolute.
+    scene: src/mjlab_microduck/robot/microduck/scene.xml
+    use_bam: true            # BAM M6 XL330 model, as in training (needs Python 3.12 / Jazzy)
+    vin: 7.4                 # battery voltage [V]
+    vin_drop_gain: 0.1       # load-dependent sag [V/Nm]
+    timestep: 0.005          # 200 Hz physics
+    decimation: 4            # 50 Hz control
+    init_z: 0.125
+    sync_mode: true          # lockstep with the policy (deterministic)
+    sync_timeout: 0.5
+    wait_for_policy: true    # hold frozen until the policy answers
+    real_time_factor: 1.0    # 0 = as fast as possible (sync mode only)
+    publish_visual: true
+    visual_rate: 20.0
+    auto_reset_on_fall: false
+
+microduck_policy:
+  ros__parameters:
+    action_scale: -1.0       # <0: from manifest.json next to the .onnx, else 1.0
+    switch_threshold: 0.05   # |twist| at or below this -> standing policy (if given)
+    cmd_timeout: 0.5
+    vx_limits: [-0.3, 0.3]
+    vy_limits: [-0.2, 0.2]
+    wz_limits: [-1.5, 1.5]
+    publish_debug: false

@@ -1,0 +1,43 @@
+# Optional: a self-contained ROS 2 Jazzy + Python 3.12 environment (RoboStack),
+# which works on any Linux including Ubuntu 22.04. Python 3.12 is what lets the
+# BAM actuator model load, so this is the most faithful way to run the sim.
+#
+#   pixi install
+#   pixi run fetch      # model + policies
+#   pixi run build
+#   pixi run sim walking_policy:=$HOME/microduck-policies/<walk>.onnx
+[workspace]
+name = "microduck_ros2"
+channels = ["https://conda.anaconda.org/robostack-jazzy", "https://conda.anaconda.org/conda-forge"]
+platforms = ["linux-64", "linux-aarch64"]
+
+[dependencies]
+python = "3.12.*"
+ros-jazzy-ros-base = "*"
+ros-jazzy-rviz2 = "*"
+ros-jazzy-joy = "*"
+ros-jazzy-teleop-twist-joy = "*"
+ros-jazzy-teleop-twist-keyboard = "*"
+ros-jazzy-nav-msgs = "*"
+ros-jazzy-visualization-msgs = "*"
+ros-jazzy-std-srvs = "*"
+ros-jazzy-tf2-ros-py = "*"
+ros-jazzy-launch-ros = "*"
+colcon-common-extensions = "*"
+setuptools = "<80"
+mujoco = "*"
+onnxruntime = "*"
+pytest = "*"
+onnx = "*"
+pip = "*"
+
+[pypi-dependencies]
+better-actuator-models = { git = "https://github.com/Rhoban/bam.git", rev = "62bd8ce12154340be97e06f7f41a0ca8f116d967" }
+numpy-stl = "*"
+
+[tasks]
+fetch = "bash scripts/fetch_microduck_assets.sh"
+build = { cmd = "mkdir -p .ws/src && touch .ws/COLCON_IGNORE && ln -sfn $PIXI_PROJECT_ROOT .ws/src/microduck_ros2 && cd .ws && colcon build --symlink-install --base-paths src" }
+test = "PYTHONPATH=microduck_policy:microduck_sim python -m pytest -q microduck_policy/test microduck_sim/test"
+sim = { cmd = "bash -c 'source .ws/install/setup.bash && ros2 launch microduck_bringup sim.launch.py \"$@\"' --" }
+keyboard = { cmd = "bash -c 'source .ws/install/setup.bash && ros2 run teleop_twist_keyboard teleop_twist_keyboard'" }

@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+build/
+install/
+log/
+.ws/
+.pixi/
+pixi.lock
+*.onnx

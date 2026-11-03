@@ -1,0 +1,20 @@
+microduck_ros2
+Copyright 2026 Arjun
+
+This product is licensed under the Apache License 2.0 (see LICENSE).
+
+It is a community project and is not affiliated with or endorsed by Pollen Robotics.
+
+Portions are derived from pollen-robotics/microduck_rl (Apache License 2.0,
+https://github.com/pollen-robotics/microduck_rl), in particular:
+  - the observation layout, default pose and command conventions
+    (scripts/infer_policy.py, AGENTS.md)
+  - the BAM actuator setup in microduck_sim/engine.py (load_mujoco_with_bam)
+
+Third-party assets NOT included in this repository and downloaded separately by
+scripts/fetch_microduck_assets.sh:
+  - Microduck 3D model files (*.stl) by Pollen Robotics, licensed under
+    CC BY-NC-SA 4.0 (non-commercial). MJCF descriptions are Apache-2.0.
+    See LICENSE-MODELS.md in microduck_rl.
+  - Policies from pollen-robotics/microduck-policies on Hugging Face, under
+    the license stated in that repository.
