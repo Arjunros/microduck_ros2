@@ -267,3 +267,24 @@ def test_agent_drives_nav2(node, fake_set, tmp_path):
         assert say("stop", timeout=10) == "Stopped."
     finally:
         launch.stop()
+
+
+def test_agent_triggers_skills(node, fake_set, tmp_path):
+    """Agent -> skill service -> policy_state round trip (creates service clients at runtime)."""
+    from std_msgs.msg import String
+    states = []
+    node.create_subscription(String, "/microduck/policy_state",
+                             lambda m: (not states or states[-1] != m.data) and states.append(m.data), 50)
+    launch = Launch("nav.launch.py", f"policy_dir:={fake_set}", f"map:={tmp_path}/apartment.yaml",
+                    "agent:=true", "camera:=false", "ball:=true", log=str(tmp_path / "launch.log"))
+    try:
+        say = _agent_probe(node)
+        assert _spin(node, 90, lambda: bool(states) and node.count_publishers("/microduck/agent/reply") > 0)
+        _spin(node, 3)
+        reply = say("kick with your left foot")
+        assert "kick left" in reply and "wrong" not in reply, reply
+        reply = say("sit then stand up")
+        assert "did sit" in reply and "did stand" in reply, reply
+    finally:
+        launch.stop()
+    assert "kick_left" in states and "sit" in states and "rise" in states

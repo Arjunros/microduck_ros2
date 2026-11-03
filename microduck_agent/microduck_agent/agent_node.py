@@ -264,7 +264,7 @@ class AgentNode(Node):
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         self.nav = ActionClient(self, NavigateToPose, "navigate_to_pose", callback_group=cb)
-        self._clients = {}
+        self._trigger_clients = {}
         self._cb = cb
         self.pub_cmd = self.create_publisher(Twist, "/cmd_vel", 10)
         self.pub_head = self.create_publisher(Float64MultiArray, "/microduck/head_cmd", 10)
@@ -295,9 +295,9 @@ class AgentNode(Node):
             "Send text on /microduck/command.")
 
     def client(self, name):
-        if name not in self._clients:
-            self._clients[name] = self.create_client(Trigger, name, callback_group=self._cb)
-        return self._clients[name]
+        if name not in self._trigger_clients:
+            self._trigger_clients[name] = self.create_client(Trigger, name, callback_group=self._cb)
+        return self._trigger_clients[name]
 
     def drive(self, vx, wz):
         t = Twist()
